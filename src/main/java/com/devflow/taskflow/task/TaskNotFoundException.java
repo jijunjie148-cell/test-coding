@@ -1,0 +1,8 @@
+package com.devflow.taskflow.task;
+
+public class TaskNotFoundException extends RuntimeException {
+
+    public TaskNotFoundException(long id) {
+        super("Task " + id + " was not found");
+    }
+}

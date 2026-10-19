@@ -1,0 +1,72 @@
+name: CI
+
+on:
+  push:
+    branches: [ main ]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: Unit and API tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Run tests
+        run: mvn -B verify
+
+  mysql-smoke:
+    name: MySQL migration and smoke test
+    runs-on: ubuntu-latest
+    services:
+      mysql:
+        image: mysql:8.0
+        env:
+          MYSQL_DATABASE: taskflow
+          MYSQL_USER: taskflow
+          MYSQL_PASSWORD: taskflow_dev
+          MYSQL_ROOT_PASSWORD: root_dev_only
+        ports:
+          - 3306:3306
+        options: >-
+          --health-cmd="mysqladmin ping -h 127.0.0.1 -u root -proot_dev_only"
+          --health-interval=10s
+          --health-timeout=5s
+          --health-retries=10
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '21'
+          cache: maven
+      - name: Build jar
+        run: mvn -B -DskipTests package
+      - name: Start application against MySQL
+        env:
+          DB_URL: jdbc:mysql://127.0.0.1:3306/taskflow?useUnicode=true&characterEncoding=utf8&serverTimezone=Asia/Shanghai&useSSL=false&allowPublicKeyRetrieval=true
+          DB_USERNAME: taskflow
+          DB_PASSWORD: taskflow_dev
+        run: |
+          java -jar target/taskflow-api-0.0.1-SNAPSHOT.jar > app.log 2>&1 &
+          echo $! > app.pid
+          for attempt in $(seq 1 30); do
+            if curl -fsS http://127.0.0.1:8080/actuator/health; then
+              break
+            fi
+            sleep 2
+          done
+          curl -fsS -X POST http://127.0.0.1:8080/api/tasks \
+            -H 'Content-Type: application/json' \
+            -d '{"title":"CI smoke task","status":"TODO","priority":"HIGH"}'
+          curl -fsS 'http://127.0.0.1:8080/api/tasks?status=TODO&page=0&size=10'
+      - name: Show application log on failure
+        if: failure()
+        run: tail -n 200 app.log
